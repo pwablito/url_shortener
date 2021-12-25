@@ -2,10 +2,30 @@ package main
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"net/http"
+
+	// Add database drivers here
+	_ "github.com/mattn/go-sqlite3"
 )
+
+type Database struct {
+	dbType   string
+	filename string
+	db       *sql.DB
+}
+
+func (db *Database) Connect() error {
+	db.db, _ = sql.Open(db.dbType, db.filename)
+	return nil
+}
+
+func (db *Database) Disconnect() error {
+	db.db.Close()
+	return nil
+}
 
 func get_url_hash(url string) string {
 	h := sha256.New()
