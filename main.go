@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
 	// Add database drivers here
 	_ "github.com/mattn/go-sqlite3"
@@ -55,7 +58,7 @@ func (db *Database) CreateTable() error {
 func get_url_hash(url string) string {
 	h := sha256.New()
 	h.Write([]byte("salt_that_should_be_generated_per_instance" + url))
-	return hex.EncodeToString(h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil))[:8]
 }
 
 func add_url_to_db(hash string, url string) error {
@@ -63,7 +66,7 @@ func add_url_to_db(hash string, url string) error {
 	db.Connect()
 	defer db.Disconnect()
 	insertStatement := `
-		INSERT INTO url(hash, url)
+		INSERT OR IGNORE INTO url(hash, url)
 		VALUES (?, ?)
 	`
 	statement, err := db.db.Prepare(insertStatement)
@@ -71,10 +74,7 @@ func add_url_to_db(hash string, url string) error {
 		return err
 	}
 	_, err = statement.Exec(hash, url)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 
 }
 
@@ -85,56 +85,62 @@ func get_url_from_db(hash string) (string, error) {
 	queryStatement := `
 		SELECT url FROM url WHERE hash=? LIMIT 1
 	`
-	statement, err := db.db.Prepare(queryStatement)
-	if err != nil {
-		return "", err
-	}
-	row, err := statement.Query(hash)
-	if err != nil {
-		return "", err
-	}
+	row := db.db.QueryRow(queryStatement, hash)
 	var url string
-	row.Scan(&url)
+	err := row.Scan(&url)
+	if err != nil {
+		return "", err
+	}
 	return url, nil
 }
 
-func everything_handler(w http.ResponseWriter, r *http.Request) {
-	hash := r.URL.Path
-	url, err := get_url_from_db(hash)
-	if err != nil {
-		http.Error(w, "Not found", http.StatusNotFound)
+func shortcut_handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		http.Redirect(w, r, "/index.html", http.StatusMovedPermanently)
 	} else {
-		http.Redirect(w, r, url, http.StatusMovedPermanently)
+		hash := strings.TrimPrefix(r.URL.Path, "/url/")
+		url, err := get_url_from_db(hash)
+		if err != nil {
+			fmt.Println(hash + " not found")
+			http.Error(w, "Not found", http.StatusNotFound)
+		} else {
+			fmt.Println("Redirecting " + hash + " to " + url)
+			http.Redirect(w, r, url, http.StatusMovedPermanently)
+		}
 	}
 }
 
+func render_page_handler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Serving " + r.URL.Path)
+	contents, err := ioutil.ReadFile("public" + r.URL.Path)
+	if err != nil {
+		w.Write([]byte("Something went wrong"))
+	}
+	w.Write(contents)
+}
+
+func write_shortened_url_response(w http.ResponseWriter, url string) {
+	w.Write([]byte(`
+		<html>
+			<head>
+				<title>Shortened URL</title>
+			</head>
+			<body>
+				<p>Your shortened url is: <a href="` + url + `">` + url + `</a></p>
+			</body>
+		</html>
+	`))
+}
+
 func add_url_handler(w http.ResponseWriter, r *http.Request) {
-	url := "" // TODO get this from the request body
+	url := r.FormValue("url")
 	hash := get_url_hash(url)
 
-	str, err := get_url_from_db(hash)
+	err := add_url_to_db(hash, url)
 	if err != nil {
-		w.Write([]byte("Error getting from db: " + err.Error() + "\n"))
-	} else if str != "" {
-		// Url already in db
-		w.Write([]byte("Error: url already in db\n"))
-		return
+		w.Write([]byte("Error adding to db: " + err.Error() + "\n"))
 	} else {
-		err = add_url_to_db(hash, url)
-		if err != nil {
-			w.Write([]byte("Error adding to db: " + err.Error() + "\n"))
-		} else {
-			w.Write([]byte(`
-				<html>
-					<head>
-						<title>Shortened URL</title>
-					</head>
-					<body>
-						<p>Your shortened url is: <a href="` + str + `">` + str + `</a></p>
-					</body>
-				</html>
-			`))
-		}
+		write_shortened_url_response(w, "http://"+r.Host+"/url/"+hash)
 	}
 }
 
@@ -151,8 +157,23 @@ func main() {
 		os.Exit(1)
 	}
 	db.Disconnect()
-	fmt.Println("Database setup, starting server")
-	http.HandleFunc("/", everything_handler)
+	fmt.Println("Database up")
+	err = filepath.Walk("./public", func(path string, info os.FileInfo, err error) error {
+		if !info.IsDir() {
+			http.HandleFunc(strings.TrimPrefix(path, "public"), render_page_handler)
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Println("Failed to register static handlers")
+		os.Exit(1)
+	}
+	http.HandleFunc("/url/", shortcut_handler)
 	http.HandleFunc("/add_url", add_url_handler)
-	http.ListenAndServe(":8080", nil)
+	fmt.Println("Server up")
+	err = http.ListenAndServe(":8080", nil)
+	if err != nil {
+		fmt.Println("Failed to start server")
+		os.Exit(1)
+	}
 }
