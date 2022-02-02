@@ -95,18 +95,14 @@ func get_url_from_db(hash string) (string, error) {
 }
 
 func shortcut_handler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" {
-		http.Redirect(w, r, "/index.html", http.StatusMovedPermanently)
+	hash := strings.TrimPrefix(r.URL.Path, "/url/")
+	url, err := get_url_from_db(hash)
+	if err != nil {
+		fmt.Println(hash + " not found")
+		http.Error(w, "Not found", http.StatusNotFound)
 	} else {
-		hash := strings.TrimPrefix(r.URL.Path, "/url/")
-		url, err := get_url_from_db(hash)
-		if err != nil {
-			fmt.Println(hash + " not found")
-			http.Error(w, "Not found", http.StatusNotFound)
-		} else {
-			fmt.Println("Redirecting " + hash + " to " + url)
-			http.Redirect(w, r, url, http.StatusMovedPermanently)
-		}
+		fmt.Println("Redirecting " + hash + " to " + url)
+		http.Redirect(w, r, url, http.StatusMovedPermanently)
 	}
 }
 
@@ -117,6 +113,10 @@ func render_page_handler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Something went wrong"))
 	}
 	w.Write(contents)
+}
+
+func index_redirect_handler(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/index.html", http.StatusMovedPermanently)
 }
 
 func write_shortened_url_response(w http.ResponseWriter, url string) {
@@ -141,6 +141,19 @@ func add_url_handler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Error adding to db: " + err.Error() + "\n"))
 	} else {
 		write_shortened_url_response(w, "http://"+r.Host+"/url/"+hash)
+	}
+}
+
+func not_found_handler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Not found: " + r.URL.Path)
+	w.Write([]byte("Page Not found"))
+}
+
+func other_handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		index_redirect_handler(w, r)
+	} else {
+		not_found_handler(w, r)
 	}
 }
 
@@ -170,6 +183,7 @@ func main() {
 	}
 	http.HandleFunc("/url/", shortcut_handler)
 	http.HandleFunc("/add_url", add_url_handler)
+	http.HandleFunc("/", other_handler)
 	fmt.Println("Server up")
 	err = http.ListenAndServe(":8080", nil)
 	if err != nil {
