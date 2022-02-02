@@ -185,7 +185,7 @@ func main() {
 	http.HandleFunc("/add_url", add_url_handler)
 	http.HandleFunc("/", other_handler)
 	fmt.Println("Server up")
-	err = http.ListenAndServe(":8080", nil)
+	err = http.ListenAndServe(":80", nil)
 	if err != nil {
 		fmt.Println("Failed to start server")
 		os.Exit(1)
